@@ -6,27 +6,39 @@ interface Step1APIProps {
     token: string;
     teamId: string;
     channels: any[];
+    accounts: Array<{
+      accountId: string;
+      accountName: string;
+      teamId: string;
+      token: string;
+    }>;
+    selectedChannels: string[];
   };
   updateConfig: (updates: Partial<Step1APIProps['config']>) => void;
   onNext: () => void;
+  onShowBulkUpload?: () => void;
 }
 
-export default function Step1_API({ config, updateConfig, onNext }: Step1APIProps) {
+export default function Step1_API({ config, updateConfig, onNext, onShowBulkUpload }: Step1APIProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
-  
-  // Account management states
+  const [successMessage, setSuccessMessage] = useState('');
+
   const [savedAccounts, setSavedAccounts] = useState<PlanlyAccount[]>([]);
-  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
+  const [formAccountId, setFormAccountId] = useState<string>('');
   const [accountName, setAccountName] = useState<string>('');
+  const [sessionAccountName, setSessionAccountName] = useState<string>('');
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [savingAccount, setSavingAccount] = useState(false);
 
-  // Load saved accounts on mount
   useEffect(() => {
     loadSavedAccounts();
   }, []);
+
+  useEffect(() => {
+    setSelectedAccountIds(prev => prev.filter(id => savedAccounts.some(acc => acc.id === id)));
+  }, [savedAccounts]);
 
   const loadSavedAccounts = async () => {
     try {
@@ -42,22 +54,49 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
   const handleConnect = async () => {
     setLoading(true);
     setError('');
-    setSuccess(false);
+    setSuccessMessage('');
 
     try {
-      const result = await window.electronAPI.connectPlanly(
-        config.token,
-        config.teamId
-      );
+      const params = {
+        token: config.token,
+        teamId: config.teamId,
+        accountName: sessionAccountName || savedAccounts.find(acc => acc.id === formAccountId)?.name,
+        accountId: formAccountId || undefined
+      };
+
+      const result = await window.electronAPI.connectPlanly(params);
 
       if (result.success) {
-        updateConfig({ channels: result.data });
-        setSuccess(true);
-        
-        // Auto proceed after 1 second
-        setTimeout(() => {
-          onNext();
-        }, 1000);
+        const accountId = result.accountId || formAccountId || `session_${Date.now()}`;
+        const nameFallback = result.accountName || sessionAccountName || savedAccounts.find(acc => acc.id === formAccountId)?.name || `Account ${config.accounts.length + 1}`;
+        const accountChannels = (result.channels || result.data || []).map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          platform: c.platform || c.social_network || 'Unknown',
+          accountId,
+          accountName: nameFallback
+        }));
+
+        const filteredChannels = (config.channels || []).filter(ch => ch.accountId !== accountId);
+        const filteredAccounts = (config.accounts || []).filter(acc => acc.accountId !== accountId);
+        const totalChannels = filteredChannels.length + accountChannels.length;
+
+        updateConfig({
+          channels: [...filteredChannels, ...accountChannels],
+          accounts: [...filteredAccounts, {
+            accountId,
+            accountName: nameFallback,
+            teamId: config.teamId,
+            token: config.token
+          }],
+          token: '',
+          teamId: ''
+        });
+
+        setSuccessMessage(`Đã kết nối "${nameFallback}" (${accountChannels.length} kênh). Tổng cộng ${totalChannels} kênh.`);
+        setSessionAccountName('');
+        setFormAccountId('');
+        onNext();
       } else {
         setError(result.error || 'Kết nối thất bại');
       }
@@ -70,20 +109,25 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
 
   const handleTokenChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     updateConfig({ token: e.target.value });
-    setSuccess(false);
+    setSuccessMessage('');
     setError('');
+    setSessionAccountName('');
+    setFormAccountId('');
   };
 
   const handleTeamIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     updateConfig({ teamId: e.target.value });
-    setSuccess(false);
+    setSuccessMessage('');
     setError('');
-    setSelectedAccountId(''); // Clear selected account
+    setSessionAccountName('');
+    setFormAccountId('');
   };
 
-  const handleSelectAccount = async (accountId: string) => {
+  const handleApplyAccountCredentials = async (accountId: string) => {
     if (!accountId) {
-      setSelectedAccountId('');
+      setFormAccountId('');
+      setSessionAccountName('');
+      updateConfig({ token: '', teamId: '' });
       return;
     }
 
@@ -95,10 +139,10 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
           token: account.token,
           teamId: account.teamId
         });
-        setSelectedAccountId(accountId);
-        setAccountName(account.name);
+        setFormAccountId(accountId);
+        setSessionAccountName(account.name);
         setError('');
-        setSuccess(false);
+        setSuccessMessage('');
       }
     } catch (err: any) {
       setError(err.message || 'Không thể tải tài khoản');
@@ -139,8 +183,8 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
     }
   };
 
-  const handleDeleteAccount = async (accountId: string, accountName: string) => {
-    if (!confirm(`Bạn có chắc muốn xóa tài khoản "${accountName}"?`)) {
+  const handleDeleteAccount = async (accountId: string, name: string) => {
+    if (!confirm(`Bạn có chắc muốn xóa tài khoản "${name}"?`)) {
       return;
     }
 
@@ -148,11 +192,13 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
       const result = await window.electronAPI.deleteAccount(accountId);
       if (result.success) {
         await loadSavedAccounts();
-        if (selectedAccountId === accountId) {
-          setSelectedAccountId('');
+        if (formAccountId === accountId) {
+          setFormAccountId('');
+          setSessionAccountName('');
           updateConfig({ token: '', teamId: '' });
         }
-        alert(`✅ Đã xóa tài khoản "${accountName}"`);
+        setSelectedAccountIds(prev => prev.filter(id => id !== accountId));
+        alert(`✅ Đã xóa tài khoản "${name}"`);
       } else {
         setError(result.error || 'Không thể xóa tài khoản');
       }
@@ -161,48 +207,229 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
     }
   };
 
+  const toggleSavedAccountSelection = (accountId: string) => {
+    setSelectedAccountIds(prev =>
+      prev.includes(accountId)
+        ? prev.filter(id => id !== accountId)
+        : [...prev, accountId]
+    );
+  };
+
+  const handleConnectSavedAccounts = async () => {
+    if (selectedAccountIds.length === 0) {
+      setError('Vui lòng chọn ít nhất một tài khoản đã lưu để kết nối');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setSuccessMessage('');
+
+    try {
+      let updatedChannels = [...(config.channels || [])];
+      let updatedAccounts = [...(config.accounts || [])];
+      const successful: Array<{ name: string; count: number }> = [];
+      const failed: string[] = [];
+
+      for (const accountId of selectedAccountIds) {
+        try {
+          const accountResult = await window.electronAPI.getAccount(accountId);
+          if (!accountResult.success || !accountResult.data) {
+            failed.push(accountId);
+            continue;
+          }
+
+          const accountData = accountResult.data;
+          const connectResult = await window.electronAPI.connectPlanly({
+            token: accountData.token,
+            teamId: accountData.teamId,
+            accountName: accountData.name,
+            accountId
+          });
+
+          if (!connectResult.success) {
+            failed.push(accountId);
+            continue;
+          }
+
+          const accountName = connectResult.accountName || accountData.name || `Account ${accountId.slice(-4)}`;
+          const accountChannels = (connectResult.channels || connectResult.data || []).map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            platform: c.platform || c.social_network || 'Unknown',
+            accountId,
+            accountName
+          }));
+
+          updatedChannels = [
+            ...updatedChannels.filter(ch => ch.accountId !== accountId),
+            ...accountChannels
+          ];
+
+          updatedAccounts = [
+            ...updatedAccounts.filter(acc => acc.accountId !== accountId),
+            {
+              accountId,
+              accountName,
+              teamId: accountData.teamId,
+              token: accountData.token
+            }
+          ];
+
+          successful.push({ name: accountName, count: accountChannels.length });
+        } catch (err) {
+          console.error('connect saved account failed', err);
+          failed.push(accountId);
+        }
+      }
+
+      if (successful.length > 0) {
+        const validChannelIds = new Set(updatedChannels.map(ch => ch.id));
+        const filteredSelectedChannels = (config.selectedChannels || []).filter(id => validChannelIds.has(id));
+
+        updateConfig({
+          channels: updatedChannels,
+          accounts: updatedAccounts,
+          selectedChannels: filteredSelectedChannels,
+          token: '',
+          teamId: ''
+        });
+
+        setSelectedAccountIds([]);
+        setFormAccountId('');
+        setSessionAccountName('');
+
+        setSuccessMessage(`Đã kết nối ${successful.length} tài khoản: ${successful.map(s => `${s.name} (${s.count} kênh)`).join(', ')}`);
+        onNext();
+      }
+
+      if (successful.length === 0 && failed.length > 0) {
+        const failedNames = failed.map(id => savedAccounts.find(acc => acc.id === id)?.name || id);
+        setError(`Không thể kết nối các tài khoản: ${failedNames.join(', ')}`);
+      } else if (failed.length > 0) {
+        const failedNames = failed.map(id => savedAccounts.find(acc => acc.id === id)?.name || id);
+        setError(`Một số tài khoản không thể kết nối: ${failedNames.join(', ')}`);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Không thể kết nối các tài khoản đã chọn');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveConnectedAccount = async (accountId: string) => {
+    try {
+      await window.electronAPI.disconnectPlanly(accountId);
+    } catch (err) {
+      console.warn('disconnect-planly error:', err);
+    }
+
+    const remainingAccounts = (config.accounts || []).filter(acc => acc.accountId !== accountId);
+    const remainingChannels = (config.channels || []).filter(ch => ch.accountId !== accountId);
+    const validChannelIds = new Set(remainingChannels.map(ch => ch.id));
+    const remainingSelected = (config.selectedChannels || []).filter(id => validChannelIds.has(id));
+
+    updateConfig({
+      accounts: remainingAccounts,
+      channels: remainingChannels,
+      selectedChannels: remainingSelected
+    });
+
+    setSelectedAccountIds(prev => prev.filter(id => id !== accountId));
+  };
+
+  const canProceed = (config.accounts || []).length > 0;
+
   return (
     <div>
       <h2 className="text-xl font-semibold mb-2">
         Bước 1: Kết nối với Planly
       </h2>
-      
+
       <p className="text-sm text-gray-600 mb-6">
-        Chọn tài khoản đã lưu hoặc nhập thông tin API mới
+        Kết nối nhiều tài khoản nếu cần, sau đó tiếp tục sang bước chọn kênh
       </p>
 
-      {/* Saved Accounts Dropdown */}
       {savedAccounts.length > 0 && (
         <div className="mb-6 p-4 bg-linear-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
           <label className="block text-sm font-medium text-gray-700 mb-2">
-           Tài khoản đã lưu
+            Tài khoản đã lưu
           </label>
-          <div className="flex gap-2">
-            <select
-              value={selectedAccountId}
-              onChange={(e) => handleSelectAccount(e.target.value)}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition bg-white"
-            >
-              <option value="">-- Chọn tài khoản --</option>
-              {savedAccounts.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.name} ({acc.teamId.substring(0, 8)}...)
-                </option>
-              ))}
-            </select>
-            {selectedAccountId && (
-              <button
-                onClick={() => {
-                  const account = savedAccounts.find(a => a.id === selectedAccountId);
-                  if (account) handleDeleteAccount(account.id, account.name);
-                }}
-                className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition"
-                title="Xóa tài khoản"
-              >
-                ✕ Xóa
-              </button>
-            )}
+          <p className="text-xs text-gray-600 mb-3">
+            Chọn một hoặc nhiều tài khoản bên dưới rồi nhấn <strong>Kết nối tài khoản đã chọn</strong>.
+          </p>
+
+          <div className="space-y-3">
+            {savedAccounts.map((acc) => {
+              const isSelected = selectedAccountIds.includes(acc.id);
+              const isApplied = formAccountId === acc.id;
+              return (
+                <div
+                  key={acc.id}
+                  className={`flex items-start justify-between gap-3 rounded-lg border px-3 py-3 transition ${
+                    isSelected ? 'border-purple-400 bg-white shadow-sm' : 'border-purple-100 bg-white/60'
+                  }`}
+                >
+                  <label className="flex items-start gap-3 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSavedAccountSelection(acc.id)}
+                      disabled={loading}
+                      className={`mt-1 h-4 w-4 rounded focus:ring-2 focus:ring-purple-500 ${
+                        loading ? 'text-purple-300 cursor-not-allowed' : 'text-purple-600'
+                      }`}
+                    />
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">{acc.name}</p>
+                      <p className="text-xs text-gray-500">Team {acc.teamId.substring(0, 8)}...</p>
+                      {isApplied && (
+                        <span className="inline-block mt-1 text-xs font-medium text-green-600">
+                          Đang dùng cho form
+                        </span>
+                      )}
+                    </div>
+                  </label>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <button
+                      onClick={() => handleApplyAccountCredentials(acc.id)}
+                      disabled={loading}
+                      className={`px-3 py-2 text-xs font-medium rounded transition ${
+                        loading
+                          ? 'bg-purple-100 text-purple-300 cursor-not-allowed'
+                          : 'text-purple-700 bg-purple-100 hover:bg-purple-200'
+                      }`}
+                    >
+                      Dùng cho form
+                    </button>
+                    <button
+                      onClick={() => handleDeleteAccount(acc.id, acc.name)}
+                      disabled={loading}
+                      className={`px-3 py-2 text-xs font-medium rounded transition ${
+                        loading
+                          ? 'bg-red-100 text-red-300 cursor-not-allowed'
+                          : 'text-red-700 bg-red-100 hover:bg-red-200'
+                      }`}
+                    >
+                      ✕ Xóa
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
+
+          <button
+            onClick={handleConnectSavedAccounts}
+            disabled={selectedAccountIds.length === 0 || loading}
+            className={`mt-4 w-full py-2 px-4 rounded-lg font-medium transition ${
+              selectedAccountIds.length === 0 || loading
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-purple-600 text-white hover:bg-purple-700'
+            }`}
+          >
+            {loading ? 'Đang kết nối...' : `Kết nối tài khoản đã chọn (${selectedAccountIds.length})`}
+          </button>
         </div>
       )}
 
@@ -239,11 +466,24 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
           </p>
         </div>
 
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Tên hiển thị cho tài khoản này (tùy chọn)
+          </label>
+          <input
+            type="text"
+            value={sessionAccountName}
+            onChange={(e) => setSessionAccountName(e.target.value)}
+            placeholder="VD: Account TikTok #1"
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+          />
+        </div>
+
         <button
           onClick={handleConnect}
-          disabled={!config.token || !config.teamId || loading || success}
+          disabled={!config.token || !config.teamId || loading}
           className={`w-full py-3 px-4 rounded-lg font-medium text-white transition flex items-center justify-center gap-2 ${
-            !config.token || !config.teamId || loading || success
+            !config.token || !config.teamId || loading
               ? 'bg-gray-400 cursor-not-allowed'
               : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800'
           }`}
@@ -254,7 +494,7 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
           )}
-          {loading ? 'Đang kết nối...' : success ? 'Đã kết nối!' : 'Kết nối'}
+          {loading ? 'Đang kết nối...' : 'Kết nối tài khoản'}
         </button>
 
         {error && (
@@ -266,30 +506,52 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
           </div>
         )}
 
-        {success && (
+        {successMessage && (
           <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
             <svg className="w-5 h-5 text-green-600 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
             </svg>
-            <p className="text-sm text-green-800">
-              Kết nối thành công! Tìm thấy {config.channels.length} kênh.
-            </p>
+            <p className="text-sm text-green-800">{successMessage}</p>
           </div>
         )}
       </div>
 
-      {/* Save Account Section */}
+      {config.accounts.length > 0 && (
+        <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <h3 className="text-sm font-semibold text-blue-800 mb-3">Tài khoản đã kết nối ({config.accounts.length})</h3>
+          <div className="space-y-2">
+            {config.accounts.map((acc) => {
+              const channelCount = config.channels.filter(ch => ch.accountId === acc.accountId).length;
+              return (
+                <div key={acc.accountId} className="flex items-center justify-between bg-white border border-blue-100 rounded-lg p-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">{acc.accountName}</p>
+                    <p className="text-xs text-gray-500">{channelCount} kênh · Team {acc.teamId.substring(0, 8)}...</p>
+                  </div>
+                  <button
+                    onClick={() => handleRemoveConnectedAccount(acc.accountId)}
+                    className="px-3 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+                  >
+                    Xóa
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {!showSaveForm ? (
         <button
           onClick={() => setShowSaveForm(true)}
-          disabled={!config.token || !config.teamId || success}
+          disabled={!config.token || !config.teamId}
           className={`mt-4 w-full py-2 px-4 rounded-lg border-2 border-dashed transition ${
-            !config.token || !config.teamId || success
+            !config.token || !config.teamId
               ? 'border-gray-300 text-gray-400 cursor-not-allowed'
               : 'border-blue-400 text-blue-600 hover:bg-blue-50'
           }`}
         >
-           Lưu tài khoản này
+          Lưu tài khoản này
         </button>
       ) : (
         <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
@@ -337,6 +599,26 @@ export default function Step1_API({ config, updateConfig, onNext }: Step1APIProp
           4. Gõ: <code className="px-1 py-0.5 bg-gray-200 rounded text-xs">localStorage.getItem('team_id')</code>
         </p>
       </div>
+
+      {config.accounts.length > 0 && onShowBulkUpload && (
+        <button
+          onClick={onShowBulkUpload}
+          className="mt-4 w-full py-3 px-6 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition-all shadow-lg flex items-center justify-center gap-2"
+        >
+          <span className="text-xl">⚡</span>
+          Bulk Upload (Upload hàng loạt với Pause/Resume)
+        </button>
+      )}
+
+      <button
+        onClick={onNext}
+        disabled={!canProceed}
+        className={`mt-4 w-full py-3 px-6 rounded-lg font-semibold transition ${
+          canProceed ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+        }`}
+      >
+        Tiếp tục bước 2 →
+      </button>
     </div>
   );
 }

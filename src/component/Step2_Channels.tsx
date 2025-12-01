@@ -4,6 +4,8 @@ interface Channel {
   id: string;
   name: string;
   platform: string;
+  accountId: string;
+  accountName: string;
 }
 
 interface Step2ChannelsProps {
@@ -103,7 +105,7 @@ export default function Step2_Channels({ config, updateConfig, onNext, onPrev }:
                   />
                   <div className="flex-1">
                     <p className="font-medium text-gray-800">{channel.name}</p>
-                    <p className="text-xs text-gray-500">{channel.platform}</p>
+                    <p className="text-xs text-gray-500">{channel.platform} · {channel.accountName}</p>
                   </div>
                   {isSelected && (
                     <svg className="w-5 h-5 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
@@ -121,7 +123,11 @@ export default function Step2_Channels({ config, updateConfig, onNext, onPrev }:
       {config.selectedChannels.length > 0 && (
         <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
           <p className="text-sm text-green-800">
-            ✅ Đã chọn <strong>{config.selectedChannels.length}</strong> kênh
+            ✅ Đã chọn <strong>{config.selectedChannels.length}</strong> kênh trên {new Set(
+              config.selectedChannels
+                .map(id => config.channels.find(c => c.id === id)?.accountId)
+                .filter(Boolean)
+            ).size} tài khoản
           </p>
         </div>
       )}

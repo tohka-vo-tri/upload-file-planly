@@ -5,8 +5,11 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Step 1: Connect to Planly and get channels
-  connectPlanly: (token: string, teamId: string) => 
-    ipcRenderer.invoke('connect-planly', token, teamId),
+  connectPlanly: (params: { token: string; teamId: string; accountName?: string; accountId?: string } | string, teamId?: string) => 
+    ipcRenderer.invoke('connect-planly', params, teamId),
+
+  disconnectPlanly: (accountId: string) =>
+    ipcRenderer.invoke('disconnect-planly', accountId),
   
   // Step 3: Select video folder
   selectVideoFolder: () => 
@@ -26,6 +29,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       channelId: string;
       videoPath: string;
       scheduledDate: string;
+      accountId?: string;
     }>;
     title: string;
   }) => ipcRenderer.invoke('upload-video-group', params),

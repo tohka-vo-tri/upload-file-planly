@@ -8,9 +8,22 @@ export interface PlanlyAccount {
 }
 
 export interface ElectronAPI {
-  connectPlanly: (token: string, teamId: string) => Promise<{
+  connectPlanly: (params: {
+    token: string;
+    teamId: string;
+    accountName?: string;
+    accountId?: string;
+  } | string, teamId?: string) => Promise<{
     success: boolean;
-    data?: any[];
+    accountId?: string;
+    accountName?: string;
+    channels?: any[];
+    data?: any[]; // backward compatibility
+    error?: string;
+  }>;
+
+  disconnectPlanly: (accountId: string) => Promise<{
+    success: boolean;
     error?: string;
   }>;
   
@@ -37,6 +50,7 @@ export interface ElectronAPI {
       videoPath: string;
       scheduledDate: string;
       videoName?: string;
+      accountId?: string;
     }>;
     title: string;
   }) => Promise<{

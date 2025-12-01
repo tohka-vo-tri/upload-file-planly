@@ -135,6 +135,8 @@ export async function createSchedule(params: ScheduleParams, token: string): Pro
     ]
   };
 
+  console.log('[Planly API] schedules/create request:', JSON.stringify(body, null, 2));
+
   const res = await fetch('https://app.planly.com/api/v2/schedules/create', {
     method: 'POST',
     headers: {
@@ -146,6 +148,7 @@ export async function createSchedule(params: ScheduleParams, token: string): Pro
   
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
+    console.error('[Planly API] schedules/create error response:', txt);
     throw new Error(`schedules/create failed: ${res.status} ${res.statusText} - ${txt}`);
   }
   
@@ -181,6 +184,7 @@ export async function createScheduleGroup(
     schedules: items.map(item => ({
       channelId: item.channelId,
       content: item.content,
+      status: 1, // Add status field (1 = scheduled)
       media: [
         {
           id: item.mediaId,
@@ -197,6 +201,8 @@ export async function createScheduleGroup(
     teamId,
     scheduleGroups
   };
+
+  console.log('[Planly API] schedule-groups/create request:', JSON.stringify(body, null, 2));
 
   const res = await fetch('https://app.planly.com/api/v2/schedule-groups/create', {
     method: 'POST',
@@ -227,16 +233,33 @@ export function isVideoFile(filePath: string): boolean {
  * List all video files in a directory
  */
 export function listVideosInDir(dirPath: string): string[] {
-  try {
-    const items = fs.readdirSync(dirPath, { withFileTypes: true });
-    return items
-      .filter((ent) => ent.isFile())
-      .map((ent) => path.join(dirPath, ent.name))
-      .filter((p) => isVideoFile(p))
-      .sort((a, b) => a.localeCompare(b));
-  } catch (e) {
-    return [];
+  const results: string[] = [];
+  const stack: string[] = [dirPath];
+
+  while (stack.length > 0) {
+    const currentDir = stack.pop();
+    if (!currentDir) continue;
+
+    try {
+      const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        const fullPath = path.join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+          continue;
+        }
+
+        if (entry.isFile() && isVideoFile(fullPath)) {
+          results.push(fullPath);
+        }
+      }
+    } catch (err) {
+      console.warn('[listVideosInDir] Skip folder due to error:', currentDir, err);
+    }
   }
+
+  return results.sort((a, b) => a.localeCompare(b));
 }
 
 /**
